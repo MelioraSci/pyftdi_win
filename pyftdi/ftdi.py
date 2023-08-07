@@ -1,5 +1,6 @@
 # Copyright (C) 2010-2020 Emmanuel Blot <emmanuel.blot@free.fr>
 # Copyright (c) 2016 Emmanuel Bouaziz <ebouaziz@free.fr>
+# Copyright (c) 2023 Meliora Scientific Inc <info@meliorasci.com>
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
