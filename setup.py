@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
+# Copyright (c) 2023 Meliora Scientfic Inc <info@meliorasci.com>
 # Copyright (c) 2010-2023 Emmanuel Blot <emmanuel.blot@free.fr>
 # Copyright (c) 2010-2016 Neotion
 # All rights reserved.
@@ -22,7 +23,7 @@ from setuptools import Command, find_packages, setup
 from setuptools.command.build_py import build_py
 
 
-NAME = 'pyftdi'
+NAME = 'pyftdi_win'
 PACKAGES = find_packages(where='.')
 META_PATH = joinpath('pyftdi', '__init__.py')
 KEYWORDS = ['driver', 'ftdi', 'usb', 'serial', 'spi', 'i2c', 'twi', 'rs232',
@@ -33,8 +34,7 @@ CLASSIFIERS = [
     'Natural Language :: English',
     'Intended Audience :: Developers',
     'License :: OSI Approved :: BSD License',
-    'Operating System :: MacOS :: MacOS X',
-    'Operating System :: POSIX',
+    'Operating System :: Microsoft :: Windows',
     'Programming Language :: Python :: 3.8',
     'Programming Language :: Python :: 3.9',
     'Programming Language :: Python :: 3.10',
@@ -43,7 +43,6 @@ CLASSIFIERS = [
     'Topic :: System :: Hardware :: Hardware Drivers',
 ]
 INSTALL_REQUIRES = [
-    'pyusb >= 1.0.0, != 1.2.0',
     'pyserial >= 3.0',
 ]
 
