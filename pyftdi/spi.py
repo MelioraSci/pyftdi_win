@@ -18,7 +18,6 @@ from logging import getLogger
 from struct import calcsize as scalc, pack as spack, unpack as sunpack
 from threading import Lock
 from typing import Any, Iterable, Mapping, Optional, Set, Union
-from usb.core import Device as UsbDevice
 from .ftdi import Ftdi, FtdiError
 
 
@@ -359,7 +358,7 @@ class SpiController:
         self._spi_dir = 0
         self._spi_mask = self.SPI_BITS
 
-    def configure(self, url: Union[str, UsbDevice],
+    def configure(self, url: str,
                   **kwargs: Mapping[str, Any]) -> None:
         """Configure the FTDI interface as a SPI master
 
