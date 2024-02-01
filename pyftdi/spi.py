@@ -24,6 +24,8 @@ from .ftdi import Ftdi, FtdiError
 class SpiIOError(FtdiError):
     """SPI I/O error"""
 
+CS_BIT_PATTERN = 0x80000000
+
 
 class SpiPort:
     """SPI port
@@ -157,13 +159,18 @@ class SpiPort:
             self._cs_hold = cs_hold
         self._cpol = bool(mode & 0x2)
         self._cpha = bool(mode & 0x1)
-        cs_clock = 0xFF & ~((int(not self._cpol) and SpiController.SCK_BIT) |
+        cs_clock = 0xFFFF & ~((int(not self._cpol) and SpiController.SCK_BIT) |
                             SpiController.DO_BIT)
-        cs_select = 0xFF & ~((SpiController.CS_BIT << self._cs) |
-                             (int(not self._cpol) and SpiController.SCK_BIT) |
-                             SpiController.DO_BIT)
-        self._cs_prolog = bytes([cs_clock, cs_select])
-        self._cs_epilog = bytes([cs_select] + [cs_clock] * int(cs_hold))
+        if self._cs & CS_BIT_PATTERN:
+            cs_select = 0xFFFF & ~((self._cs & 0xFFFF) |
+                                 (int(not self._cpol) and SpiController.SCK_BIT) |
+                                 SpiController.DO_BIT)
+        else:
+            cs_select = 0xFFFF & ~((SpiController.CS_BIT << self._cs) |
+                                 (int(not self._cpol) and SpiController.SCK_BIT) |
+                                 SpiController.DO_BIT)
+        self._cs_prolog = [cs_clock, cs_select]
+        self._cs_epilog = [cs_select] + [cs_clock] * int(cs_hold)
 
     def force_select(self, level: Optional[bool] = None,
                      cs_hold: float = 0) -> None:
@@ -346,17 +353,17 @@ class SpiController:
         self._gpio_port = None
         self._gpio_dir = 0
         self._gpio_mask = 0
-        self._gpio_low = 0
+        self._gpio_data = 0
         self._wide_port = False
         self._cs_count = cs_count
         self._turbo = turbo
         self._immediate = bytes((Ftdi.SEND_IMMEDIATE,))
         self._frequency = 0.0
         self._clock_phase = False
-        self._cs_bits = 0
-        self._spi_ports = []
+        self._spi_ports = {}
         self._spi_dir = 0
         self._spi_mask = self.SPI_BITS
+        self._cs_bits = 0
 
     def configure(self, url: str,
                   **kwargs: Mapping[str, Any]) -> None:
@@ -392,9 +399,6 @@ class SpiController:
         if 'cs_count' in kwargs:
             self._cs_count = int(kwargs['cs_count'])
             del kwargs['cs_count']
-        if not 1 <= self._cs_count <= 5:
-            raise ValueError('Unsupported CS line count: %d' %
-                             self._cs_count)
         if 'turbo' in kwargs:
             self._turbo = bool(kwargs['turbo'])
             del kwargs['turbo']
@@ -418,9 +422,12 @@ class SpiController:
         with self._lock:
             if self._frequency > 0.0:
                 raise SpiIOError('Already configured')
-            self._cs_bits = (((SpiController.CS_BIT << self._cs_count) - 1) &
-                             ~(SpiController.CS_BIT - 1))
-            self._spi_ports = [None] * self._cs_count
+            if self._cs_count & CS_BIT_PATTERN:
+                self._cs_bits = ((self._cs_count & 0xFFFF) &
+                                 ~(SpiController.CS_BIT - 1))
+            else:
+                self._cs_bits = (((SpiController.CS_BIT << self._cs_count) - 1) &
+                                 ~(SpiController.CS_BIT - 1))
             self._spi_dir = (self._cs_bits |
                              SpiController.DO_BIT |
                              SpiController.SCK_BIT)
@@ -465,24 +472,26 @@ class SpiController:
 
            :note: SPI mode 1 and 3 are not officially supported.
 
-           :param cs: chip select slot, starting from 0
+           :param cs: chip select slot, starting from 0 (-1 indicates no chip select line is asserted)
            :param freq: SPI bus frequency for this slave in Hz
            :param mode: SPI mode [0, 1, 2, 3]
         """
         with self._lock:
             if not self._ftdi.is_connected:
                 raise SpiIOError("FTDI controller not initialized")
-            if cs >= len(self._spi_ports):
-                if cs < 5:
-                    # increase cs_count (up to 4) to reserve more /CS channels
+            if cs & CS_BIT_PATTERN:
+                if ((cs & 0xFFFF) | self._cs_bits) != self._cs_bits:
+                    raise SpiIOError("/CS mask %d uses pins not reserved for SPI" % (cs & 0xFFFF))
+            else:
+                if ((SpiController.CS_BIT << cs) | self._cs_bits) != self._cs_bits:
+                    # increase cs_count (up to 13) to reserve more /CS channels
                     raise SpiIOError("/CS pin %d not reserved for SPI" % cs)
-                raise SpiIOError("No such SPI port: %d" % cs)
-            if not self._spi_ports[cs]:
+            if not cs in self._spi_ports:
                 freq = min(freq or self._frequency, self.frequency_max)
                 hold = freq and (1+int(1E6/freq))
-                self._spi_ports[cs] = SpiPort(self, cs, cs_hold=hold,
-                                              spi_mode=mode)
-                self._spi_ports[cs].set_frequency(freq)
+                new_port = SpiPort(self, cs, cs_hold=hold, spi_mode=mode)
+                new_port.set_frequency(freq)
+                self._spi_ports[cs] = new_port
                 self._flush()
             return self._spi_ports[cs]
 
@@ -555,7 +564,7 @@ class SpiController:
 
            :return: Set of /CS, one for each configured slaves
         """
-        return {port[0] for port in enumerate(self._spi_ports) if port[1]}
+        return {(port[0] - 1) for port in enumerate(self._spi_ports) if port[1]}
 
     @property
     def gpio_pins(self):
@@ -600,8 +609,8 @@ class SpiController:
 
     def exchange(self, frequency: float,
                  out: Union[bytes, bytearray, Iterable[int]], readlen: int,
-                 cs_prolog: Optional[bytes] = None,
-                 cs_epilog: Optional[bytes] = None,
+                 cs_prolog: Optional[Union[bytes, Iterable[int]]] = None,
+                 cs_epilog: Optional[Union[bytes, Iterable[int]]] = None,
                  cpol: bool = False, cpha: bool = False,
                  duplex: bool = False, droptail: int = 0) -> bytes:
         """Perform an exchange or a transaction with the SPI slave
@@ -686,7 +695,7 @@ class SpiController:
             data &= ~self._gpio_mask
             data |= value
             self._write_raw(data, use_high)
-            self._gpio_low = data & 0xFF & ~self._spi_mask
+            self._gpio_data = data & ~self._spi_mask
 
     def set_gpio_direction(self, pins: int, direction: int) -> None:
         """Change the direction of the GPIO pins
@@ -756,16 +765,21 @@ class SpiController:
             # to avoid setting unavailable values on each call.
             self._frequency = frequency
         cmd = bytearray()
-        direction = self.direction & 0xFF
+        direction_low = self.direction & 0xFF
+        direction_high = (self.direction >> 8) & 0xFF
         for ctrl in sequence:
             ctrl &= self._spi_mask
-            ctrl |= self._gpio_low
-            cmd.extend((Ftdi.SET_BITS_LOW, ctrl, direction))
+            ctrl |= self._gpio_data
+            ctrl_low = ctrl & 0xFF
+            cmd.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
+            if self._wide_port:
+                ctrl_high = (ctrl >> 8) & 0xFF
+                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
         self._ftdi.write_data(cmd)
 
     def _exchange_half_duplex(self, frequency: float,
                               out: Union[bytes, bytearray, Iterable[int]],
-                              readlen: int, cs_prolog: bytes, cs_epilog: bytes,
+                              readlen: int, cs_prolog: Union[bytes, Iterable[int]], cs_epilog: Union[bytes, Iterable[int]],
                               cpol: bool, cpha: bool,
                               droptail: int) -> bytes:
         if not self._ftdi.is_connected:
@@ -786,21 +800,34 @@ class SpiController:
             # store the requested value, not the actual one (best effort),
             # to avoid setting unavailable values on each call.
             self._frequency = frequency
-        direction = self.direction & 0xFF  # low bits only
+        direction_low = self.direction & 0xFF
+        direction_high = (self.direction >> 8) & 0xFF
         cmd = bytearray()
         for ctrl in cs_prolog or []:
             ctrl &= self._spi_mask
-            ctrl |= self._gpio_low
-            cmd.extend((Ftdi.SET_BITS_LOW, ctrl, direction))
+            ctrl |= self._gpio_data
+            ctrl_low = ctrl & 0xFF
+            cmd.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
+            if self._wide_port:
+                ctrl_high = (ctrl >> 8) & 0xFF
+                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
         epilog = bytearray()
         if cs_epilog:
             for ctrl in cs_epilog:
                 ctrl &= self._spi_mask
-                ctrl |= self._gpio_low
-                epilog.extend((Ftdi.SET_BITS_LOW, ctrl, direction))
+                ctrl |= self._gpio_data
+                ctrl_low = ctrl & 0xFF
+                epilog.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
+                if self._wide_port:
+                    ctrl_high = (ctrl >> 8) & 0xFF
+                    epilog.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
             # Restore idle state
-            cs_high = [Ftdi.SET_BITS_LOW, self._cs_bits | self._gpio_low,
-                       direction]
+            cs_high_data = self._cs_bits | self._gpio_data
+            cs_high_data_low = cs_high_data & 0xFF
+            cs_high = [Ftdi.SET_BITS_LOW, cs_high_data_low, direction_low]
+            if self._wide_port:
+                cs_high_data_high = (cs_high_data >> 8) & 0xFF
+                cs_high.extend((Ftdi.SET_BITS_HIGH, cs_high_data_high, direction_high))
             if not self._turbo:
                 cs_high.append(Ftdi.SEND_IMMEDIATE)
             epilog.extend(cs_high)
@@ -874,7 +901,7 @@ class SpiController:
 
     def _exchange_full_duplex(self, frequency: float,
                               out: Union[bytes, bytearray, Iterable[int]],
-                              cs_prolog: bytes, cs_epilog: bytes,
+                              cs_prolog: Union[bytes, Iterable[int]], cs_epilog: Union[bytes, Iterable[int]],
                               cpol: bool, cpha: bool,
                               droptail: int) -> bytes:
         if not self._ftdi.is_connected:
@@ -893,21 +920,34 @@ class SpiController:
             # store the requested value, not the actual one (best effort),
             # to avoid setting unavailable values on each call.
             self._frequency = frequency
-        direction = self.direction & 0xFF  # low bits only
+        direction_low = self.direction & 0xFF
+        direction_high = (self.direction >> 8) & 0xFF
         cmd = bytearray()
         for ctrl in cs_prolog or []:
             ctrl &= self._spi_mask
-            ctrl |= self._gpio_low
-            cmd.extend((Ftdi.SET_BITS_LOW, ctrl, direction))
+            ctrl |= self._gpio_data
+            ctrl_low = ctrl & 0xFF
+            cmd.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
+            if self._wide_port:
+                ctrl_high = (ctrl >> 8) & 0xFF
+                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
         epilog = bytearray()
         if cs_epilog:
             for ctrl in cs_epilog:
                 ctrl &= self._spi_mask
-                ctrl |= self._gpio_low
-                epilog.extend((Ftdi.SET_BITS_LOW, ctrl, direction))
+                ctrl |= self._gpio_data
+                ctrl_low = ctrl & 0xFF
+                epilog.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
+                if self._wide_port:
+                    ctrl_high = (ctrl >> 8) & 0xFF
+                    epilog.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
             # Restore idle state
-            cs_high = [Ftdi.SET_BITS_LOW, self._cs_bits | self._gpio_low,
-                       direction]
+            cs_high_data = self._cs_bits | self._gpio_data
+            cs_high_data_low = cs_high_data & 0xFF
+            cs_high = [Ftdi.SET_BITS_LOW, cs_high_data_low, direction_low]
+            if self._wide_port:
+                cs_high_data_high = (cs_high_data >> 8) & 0xFF
+                cs_high.extend((Ftdi.SET_BITS_HIGH, cs_high_data_high, direction_high))
             if not self._turbo:
                 cs_high.append(Ftdi.SEND_IMMEDIATE)
             epilog.extend(cs_high)
