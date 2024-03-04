@@ -774,7 +774,7 @@ class SpiController:
             cmd.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
             if self._wide_port:
                 ctrl_high = (ctrl >> 8) & 0xFF
-                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
+                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl_high, direction_high))
         self._ftdi.write_data(cmd)
 
     def _exchange_half_duplex(self, frequency: float,
@@ -810,7 +810,7 @@ class SpiController:
             cmd.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
             if self._wide_port:
                 ctrl_high = (ctrl >> 8) & 0xFF
-                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
+                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl_high, direction_high))
         epilog = bytearray()
         if cs_epilog:
             for ctrl in cs_epilog:
@@ -820,7 +820,7 @@ class SpiController:
                 epilog.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
                 if self._wide_port:
                     ctrl_high = (ctrl >> 8) & 0xFF
-                    epilog.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
+                    epilog.extend((Ftdi.SET_BITS_HIGH, ctrl_high, direction_high))
             # Restore idle state
             cs_high_data = self._cs_bits | self._gpio_data
             cs_high_data_low = cs_high_data & 0xFF
@@ -930,7 +930,7 @@ class SpiController:
             cmd.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
             if self._wide_port:
                 ctrl_high = (ctrl >> 8) & 0xFF
-                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
+                cmd.extend((Ftdi.SET_BITS_HIGH, ctrl_high, direction_high))
         epilog = bytearray()
         if cs_epilog:
             for ctrl in cs_epilog:
@@ -940,7 +940,7 @@ class SpiController:
                 epilog.extend((Ftdi.SET_BITS_LOW, ctrl_low, direction_low))
                 if self._wide_port:
                     ctrl_high = (ctrl >> 8) & 0xFF
-                    epilog.extend((Ftdi.SET_BITS_HIGH, ctrl, direction_high))
+                    epilog.extend((Ftdi.SET_BITS_HIGH, ctrl_high, direction_high))
             # Restore idle state
             cs_high_data = self._cs_bits | self._gpio_data
             cs_high_data_low = cs_high_data & 0xFF
